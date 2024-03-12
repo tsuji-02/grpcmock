@@ -25,7 +25,8 @@ type Server struct {
 	server   *grpc.Server
 	// tlsc              *tls.Config
 	// cacert            []byte
-	cc *grpc.ClientConn
+	cc       *grpc.ClientConn
+	services map[string]*grpc.ServiceDesc
 	// requests []*Request[*dynamicpb.Message]
 	// healthCheck       bool
 	// disableReflection bool
@@ -58,6 +59,7 @@ func NewServer(t TB) *Server {
 		t:        t,
 		matchers: make(map[string]any),
 		// matchers: make(map[string]*matcher),
+		services: make(map[string]*grpc.ServiceDesc),
 	}
 }
 
@@ -80,6 +82,9 @@ func (s *Server) Addr() string {
 }
 
 func (s *Server) Start() {
+	for _, service := range s.services {
+		s.server.RegisterService(service, nil)
+	}
 	go s.server.Serve(s.listener)
 	// TODO: wait for ready
 }
@@ -109,17 +114,26 @@ func Register[R any, I, O protoreflect.ProtoMessage](s *Server, fullMethodName s
 	matchers, exists := s.matchers[fullMethodName].([]*Matcher[I, O])
 	matchers = append(matchers, m)
 	s.matchers[fullMethodName] = matchers
-	if !exists {
-		s.server.RegisterService(
-			&grpc.ServiceDesc{
-				ServiceName: serviceName,
-				Methods: []grpc.MethodDesc{
-					{
-						MethodName: methodName,
-						Handler:    newUnaryHandler[I, O](s, fullMethodName),
-					},
+	service, ok := s.services[serviceName]
+	if ok && !exists {
+		service.Methods = append(service.Methods,
+			grpc.MethodDesc{
+				MethodName: methodName,
+				Handler:    newUnaryHandler[I, O](s, fullMethodName),
+			},
+		)
+		s.services[serviceName] = service
+	}
+	if !ok && !exists {
+		s.services[serviceName] = &grpc.ServiceDesc{
+			ServiceName: serviceName,
+			Methods: []grpc.MethodDesc{
+				{
+					MethodName: methodName,
+					Handler:    newUnaryHandler[I, O](s, fullMethodName),
 				},
-			}, nil)
+			},
+		}
 	}
 	return m
 }
